@@ -33,6 +33,7 @@ def eqframe(actual, expected, **kwargs):
 
 class TestFilter(unittest.TestCase):
     sales = gramex.cache.open(sales_file, 'xlsx')
+    dates = gramex.cache.open(sales_file, 'xlsx', sheet_name='dates')
     db = set()
 
     def test_get_engine(self):
@@ -268,6 +269,19 @@ class TestFilter(unittest.TestCase):
                     # Don't check_dtype in that case.
                     eq(args, subset, check_dtype=len(subset) > 0)
 
+        # _by= empty
+        aggs = ['growth|sum', 'sales|sum']
+        expected = pd.DataFrame(
+            [[sales[agg[0]].agg(agg[1]) for agg in [x.split('|') for x in aggs]]],
+            columns=aggs
+        )
+        eq({'_by': [], '_c': aggs}, expected)
+        expected = (sales.select_dtypes(include=pd.np.number).agg('sum')
+                    .to_frame().T.add_suffix('|sum'))
+        eq({'_by': []}, expected)
+        for _c in [[], ['']]:
+            ok_(gramex.data.filter(args={'_by': [], '_c': _c}, **kwargs).empty)
+
         # Invalid values raise errors
         with assert_raises(ValueError):
             eq({'_limit': ['abc']}, sales)
@@ -357,19 +371,30 @@ class TestFilter(unittest.TestCase):
             gramex.data.filter(url=url, table='{x}', args={'x': ['sales'], 'p': ['a b']},
                                query='SELECT * FROM {x} WHERE {p} > 0')
 
+    def check_filter_dates(self, dbname, url, na_position, sum_na=True):
+        self.db.add(dbname)
+        df = self.dates[self.dates['date'] > '2018-02-01 01:00:00']
+        dff = gramex.data.filter(url=url, table='dates', args={'date>': ['2018-02-01 01:00:00']})
+        eqframe(dff, df)
+
     def test_mysql(self):
-        url = dbutils.mysql_create_db(server.mysql, 'test_filter', sales=self.sales)
+        url = dbutils.mysql_create_db(server.mysql, 'test_filter', **{
+            'sales': self.sales, 'dates': self.dates})
         self.check_filter_db('mysql', url, na_position='first')
+        self.check_filter_dates('mysql', url, na_position='last')
 
     def test_postgres(self):
         url = dbutils.postgres_create_db(server.postgres, 'test_filter', **{
-            'sales': self.sales, 'filter.sales': self.sales})
+            'sales': self.sales, 'filter.sales': self.sales, 'dates': self.dates})
         self.check_filter_db('postgres', url, na_position='last')
         self.check_filter(url=url, table='filter.sales', na_position='last', sum_na=True)
+        self.check_filter_dates('postgres', url, na_position='last')
 
     def test_sqlite(self):
-        url = dbutils.sqlite_create_db('test_filter.db', sales=self.sales)
+        url = dbutils.sqlite_create_db('test_filter.db', **{
+            'sales': self.sales, 'dates': self.dates})
         self.check_filter_db('sqlite', url, na_position='first')
+        self.check_filter_dates('sqlite', url, na_position='last')
 
     @classmethod
     def tearDownClass(cls):
